@@ -2,54 +2,21 @@ import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import Icon from '@/components/ui/icon';
+import { Map2GIS } from './Map2GIS';
+import { api, Incident as APIIncident } from '@/lib/api';
+import { toast } from 'sonner';
 
 interface Incident {
-  id: string;
+  id: string | number;
   type: 'accident' | 'ice' | 'snow' | 'repair' | 'police';
   title: string;
   description: string;
   lat: number;
   lng: number;
   confirmations: number;
-  timestamp: Date;
+  timestamp: Date | string;
   userName: string;
 }
-
-const mockIncidents: Incident[] = [
-  {
-    id: '1',
-    type: 'accident',
-    title: 'ДТП на перекрёстке',
-    description: 'Столкновение двух автомобилей, левая полоса перекрыта',
-    lat: 55.751244,
-    lng: 37.618423,
-    confirmations: 12,
-    timestamp: new Date(Date.now() - 15 * 60000),
-    userName: 'Александр К.'
-  },
-  {
-    id: '2',
-    type: 'ice',
-    title: 'Гололёд',
-    description: 'Участок дороги покрыт льдом, будьте осторожны',
-    lat: 55.755826,
-    lng: 37.617299,
-    confirmations: 8,
-    timestamp: new Date(Date.now() - 30 * 60000),
-    userName: 'Мария П.'
-  },
-  {
-    id: '3',
-    type: 'repair',
-    title: 'Ремонт дороги',
-    description: 'Дорожные работы, движение по одной полосе',
-    lat: 55.748212,
-    lng: 37.615643,
-    confirmations: 5,
-    timestamp: new Date(Date.now() - 45 * 60000),
-    userName: 'Дмитрий С.'
-  }
-];
 
 const getIncidentIcon = (type: string) => {
   switch (type) {
@@ -73,8 +40,9 @@ const getIncidentColor = (type: string) => {
   }
 };
 
-const getTimeAgo = (date: Date) => {
-  const minutes = Math.floor((Date.now() - date.getTime()) / 60000);
+const getTimeAgo = (date: Date | string) => {
+  const timestamp = typeof date === 'string' ? new Date(date) : date;
+  const minutes = Math.floor((Date.now() - timestamp.getTime()) / 60000);
   if (minutes < 60) return `${minutes} мин назад`;
   const hours = Math.floor(minutes / 60);
   return `${hours} ч назад`;
@@ -83,23 +51,87 @@ const getTimeAgo = (date: Date) => {
 export const MapView = () => {
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          setUserLocation({
+          const location = {
             lat: position.coords.latitude,
             lng: position.coords.longitude
-          });
+          };
+          setUserLocation(location);
+          loadIncidents(location.lat, location.lng);
         },
         (error) => {
           console.log('Geolocation error:', error);
-          setUserLocation({ lat: 55.751244, lng: 37.618423 });
+          const defaultLocation = { lat: 55.751244, lng: 37.618423 };
+          setUserLocation(defaultLocation);
+          loadIncidents(defaultLocation.lat, defaultLocation.lng);
         }
       );
     }
   }, []);
+
+  const loadIncidents = async (lat: number, lng: number) => {
+    try {
+      setLoading(true);
+      const data = await api.getIncidents({ 
+        lat, 
+        lng, 
+        radius: 59, 
+        status: 'active' 
+      });
+      
+      const formattedIncidents = data.map((inc: APIIncident) => ({
+        id: inc.id,
+        type: inc.type,
+        title: inc.title,
+        description: inc.description,
+        lat: inc.latitude,
+        lng: inc.longitude,
+        confirmations: inc.confirmations_count || 0,
+        timestamp: inc.created_at,
+        userName: inc.first_name && inc.last_name 
+          ? `${inc.first_name} ${inc.last_name}` 
+          : inc.username || 'Аноним'
+      }));
+      
+      setIncidents(formattedIncidents);
+    } catch (error) {
+      console.error('Error loading incidents:', error);
+      toast.error('Не удалось загрузить инциденты');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleConfirm = async (incidentId: string | number) => {
+    const userId = localStorage.getItem('userId');
+    if (!userId) {
+      toast.error('Необходимо авторизоваться');
+      return;
+    }
+
+    try {
+      await api.confirmIncident(Number(incidentId), Number(userId));
+      toast.success('Инцидент подтверждён!');
+      if (userLocation) {
+        loadIncidents(userLocation.lat, userLocation.lng);
+      }
+    } catch (error) {
+      toast.error('Ошибка подтверждения');
+    }
+  };
+
+  const markers = incidents.map(inc => ({
+    id: inc.id,
+    coordinates: [inc.lng, inc.lat] as [number, number],
+    type: inc.type,
+    title: inc.title
+  }));
 
   return (
     <div className="h-full w-full relative bg-slate-50">
@@ -118,19 +150,27 @@ export const MapView = () => {
         </Card>
       </div>
 
-      <div className="h-full w-full bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center">
-        <div className="text-center px-6">
-          <div className="w-20 h-20 mx-auto mb-4 bg-primary/10 rounded-full flex items-center justify-center">
-            <Icon name="Map" size={40} className="text-primary" />
+      {userLocation ? (
+        <Map2GIS
+          center={[userLocation.lng, userLocation.lat]}
+          zoom={12}
+          markers={markers}
+        />
+      ) : (
+        <div className="h-full w-full bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center">
+          <div className="text-center px-6">
+            <div className="w-20 h-20 mx-auto mb-4 bg-primary/10 rounded-full flex items-center justify-center">
+              <Icon name="Map" size={40} className="text-primary" />
+            </div>
+            <p className="text-muted-foreground text-sm">
+              {loading ? 'Загрузка карты...' : 'Запрос местоположения...'}
+            </p>
           </div>
-          <p className="text-muted-foreground text-sm">
-            {userLocation ? 'Карта загружается...' : 'Запрос местоположения...'}
-          </p>
         </div>
-      </div>
+      )}
 
       <div className="absolute bottom-24 left-0 right-0 z-10 px-4 pb-4 space-y-3 max-h-[50vh] overflow-y-auto">
-        {mockIncidents.map((incident) => (
+        {incidents.map((incident) => (
           <Card
             key={incident.id}
             className="bg-white/95 backdrop-blur-sm shadow-lg border-0 cursor-pointer hover:shadow-xl transition-all duration-200 animate-fade-in"
@@ -160,7 +200,13 @@ export const MapView = () => {
               </div>
               {selectedIncident?.id === incident.id && (
                 <div className="mt-4 pt-4 border-t animate-slide-up">
-                  <button className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-medium hover:bg-primary/90 transition-colors flex items-center justify-center gap-2">
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleConfirm(incident.id);
+                    }}
+                    className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-medium hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
+                  >
                     <Icon name="ThumbsUp" size={18} />
                     Подтвердить инцидент
                   </button>
@@ -169,6 +215,17 @@ export const MapView = () => {
             </div>
           </Card>
         ))}
+        {incidents.length === 0 && !loading && (
+          <Card className="bg-white/95 backdrop-blur-sm shadow-lg border-0 p-8 text-center">
+            <div className="w-16 h-16 mx-auto mb-4 bg-primary/10 rounded-full flex items-center justify-center">
+              <Icon name="AlertCircle" size={32} className="text-primary" />
+            </div>
+            <h3 className="font-semibold text-lg mb-2">Инцидентов нет</h3>
+            <p className="text-sm text-muted-foreground">
+              В вашем радиусе пока нет сообщений о проблемах на дороге
+            </p>
+          </Card>
+        )}
       </div>
     </div>
   );

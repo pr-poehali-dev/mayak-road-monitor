@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { MapView } from '@/components/MapView';
 import { AddIncidentForm } from '@/components/AddIncidentForm';
 import { UserProfile } from '@/components/UserProfile';
@@ -6,12 +6,33 @@ import { UserPosts } from '@/components/UserPosts';
 import { AdminPanel } from '@/components/AdminPanel';
 import { SupportForm } from '@/components/SupportForm';
 import { BottomNav } from '@/components/BottomNav';
+import { TelegramAuth } from '@/components/TelegramAuth';
 
 export type Screen = 'map' | 'add' | 'profile' | 'posts' | 'admin' | 'support';
 
 const Index = () => {
   const [currentScreen, setCurrentScreen] = useState<Screen>('map');
-  const [isAdmin] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    const userId = localStorage.getItem('userId');
+    const userIsAdmin = localStorage.getItem('userIsAdmin') === 'true';
+    
+    if (userId) {
+      setIsAuthenticated(true);
+      setIsAdmin(userIsAdmin);
+    }
+  }, []);
+
+  const handleAuthSuccess = (user: any) => {
+    setIsAuthenticated(true);
+    setIsAdmin(user.is_admin);
+  };
+
+  if (!isAuthenticated) {
+    return <TelegramAuth onAuthSuccess={handleAuthSuccess} />;
+  }
 
   const renderScreen = () => {
     switch (currentScreen) {
